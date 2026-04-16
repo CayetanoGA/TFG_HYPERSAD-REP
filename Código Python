@@ -1,0 +1,1419 @@
+import sqlite3
+import math
+import tkinter as tk
+from tkinter import ttk, messagebox, filedialog
+from datetime import datetime
+import os
+import re
+import webbrowser
+import csv
+ 
+DB_NAME = "hipertermia_clinica.db"
+ 
+ 
+# ================================================================
+# FASE 1: BASE DE DATOS (Experiencia + Historial Clínico)
+# ================================================================
+def preparar_sistema():
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+ 
+    cursor.execute('''
+CREATE TABLE IF NOT EXISTS Simulaciones (
+id INTEGER PRIMARY KEY,
+prof_musculo_mm REAL,
+espesor_grasa_mm REAL,
+L_slot_mm REAL,
+potencia_w REAL,
+temp_max_c REAL
+)
+''')
+ 
+    # Limpiar la tabla de simulaciones para evitar duplicados o mezclas
+    cursor.execute("DELETE FROM Simulaciones")
+ 
+    casos = [
+        # ============================================================
+        # CASO REAL VALIDADO
+        # ============================================================
+        (1, 20.0, 5.0, 85.0, 25.0, 44.2),
+ 
+        # ============================================================
+        # CASOS DERIVADOS INICIALES
+        # ============================================================
+        (2, 18.0, 4.5, 84.5, 24.0, 43.9),
+        (3, 22.0, 6.0, 85.5, 26.0, 44.1),
+        (4, 26.0, 7.0, 84.0, 29.0, 44.2),
+ 
+        # ============================================================
+        # CASOS 5–19
+        # ============================================================
+        (5, 18.0, 4.0, 87.0, 24.0, 43.9),
+        (6, 22.0, 6.0, 83.0, 26.0, 44.1),
+        (7, 16.0, 5.0, 88.0, 23.0, 43.7),
+        (8, 24.0, 5.5, 84.0, 27.0, 44.0),
+        (9, 26.0, 6.5, 82.0, 29.0, 44.2),
+        (10, 28.0, 7.0, 80.0, 31.0, 44.4),
+        (11, 30.0, 8.0, 82.0, 33.0, 44.3),
+        (12, 32.0, 9.0, 81.0, 35.0, 44.5),
+        (13, 34.0, 6.0, 84.0, 36.0, 44.1),
+        (14, 36.0, 7.5, 83.0, 38.0, 44.3),
+        (15, 38.0, 8.5, 82.0, 40.0, 44.4),
+        (16, 40.0, 9.5, 81.0, 42.0, 44.5),
+        (17, 42.0, 6.5, 84.5, 43.0, 44.2),
+        (18, 44.0, 7.0, 83.5, 45.0, 44.4),
+        (19, 46.0, 8.0, 82.5, 47.0, 44.6),
+ 
+        # ============================================================
+        # CASOS 20–39
+        # ============================================================
+        (20, 18.0, 4.5, 85.0, 24.0, 43.8),
+        (21, 19.5, 5.0, 84.5, 25.0, 44.0),
+        (22, 21.0, 5.5, 85.5, 26.0, 44.2),
+        (23, 22.5, 6.0, 84.0, 27.0, 44.1),
+        (24, 24.0, 6.5, 83.5, 28.5, 44.2),
+        (25, 25.5, 7.0, 84.0, 30.0, 44.3),
+        (26, 27.0, 7.5, 85.0, 31.5, 44.3),
+        (27, 28.5, 8.0, 85.5, 33.0, 44.4),
+        (28, 30.0, 8.5, 84.5, 34.5, 44.3),
+        (29, 31.5, 9.0, 84.0, 36.0, 44.4),
+        (30, 33.0, 9.5, 83.5, 37.5, 44.4),
+        (31, 34.5, 7.0, 85.5, 38.0, 44.2),
+        (32, 36.0, 7.5, 85.0, 39.5, 44.3),
+        (33, 37.5, 8.0, 84.5, 41.0, 44.4),
+        (34, 39.0, 8.5, 84.0, 42.5, 44.4),
+        (35, 40.5, 9.0, 83.5, 44.0, 44.5),
+        (36, 42.0, 9.5, 84.0, 45.5, 44.5),
+        (37, 43.5, 10.0, 85.0, 47.0, 44.6),
+        (38, 45.0, 10.5, 84.5, 48.5, 44.6),
+        (39, 46.5, 11.0, 84.0, 50.0, 44.7)
+    ]
+ 
+    cursor.executemany(
+        "INSERT OR REPLACE INTO Simulaciones VALUES (?, ?, ?, ?, ?, ?)",
+        casos
+    )
+ 
+    cursor.execute('''
+CREATE TABLE IF NOT EXISTS Historial_v6 (
+id INTEGER PRIMARY KEY AUTOINCREMENT,
+fecha TEXT,
+nombre TEXT,
+dni TEXT,
+edad TEXT,
+sexo TEXT,
+musculo REAL,
+grasa REAL,
+k_usado INTEGER,
+tipo_caso TEXT,
+l_slot REAL,
+potencia REAL,
+temp_max REAL,
+dist_knn REAL,
+similitud REAL,
+seguridad TEXT
+)
+''')
+ 
+    # Asegurar columnas nuevas por si la tabla ya existía de antes
+    asegurar_columnas_historial(cursor)
+ 
+    conn.commit()
+    conn.close()
+ 
+ 
+def asegurar_columnas_historial(cursor):
+    cursor.execute("PRAGMA table_info(Historial_v6)")
+    columnas_actuales = [fila[1] for fila in cursor.fetchall()]
+ 
+    columnas_necesarias = {
+        "confianza": "TEXT",
+        "rango_cubierto": "TEXT",
+        "simulacion_pendiente": "TEXT"
+    }
+ 
+    for columna, tipo in columnas_necesarias.items():
+        if columna not in columnas_actuales:
+            cursor.execute(f"ALTER TABLE Historial_v6 ADD COLUMN {columna} {tipo}")
+ 
+ 
+# ================================================================
+# FASE 2: MOTOR kNN Y VALIDACIONES
+# ================================================================
+def validar_dni_nie(documento):
+    documento = documento.upper().replace("-", "").replace(" ", "").strip()
+ 
+    if not re.match(r'^[XYZ]?\d{1,8}[A-Z]$', documento):
+        return False
+ 
+    letras = "TRWAGMYFPDXBNJZSQVHLCKE"
+ 
+    if documento[0] in ['X', 'Y', 'Z']:
+        mapa_nie = {'X': '0', 'Y': '1', 'Z': '2'}
+        numero = mapa_nie[documento[0]] + documento[1:-1]
+    else:
+        numero = documento[:-1]
+ 
+    try:
+        return letras[int(numero) % 23] == documento[-1]
+    except ValueError:
+        return False
+ 
+ 
+def leer_experiencia():
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+    cur.execute("""
+SELECT prof_musculo_mm, espesor_grasa_mm, L_slot_mm, potencia_w, temp_max_c
+FROM Simulaciones
+""")
+    datos = cur.fetchall()
+    conn.close()
+    return datos
+ 
+ 
+def obtener_rangos_experiencia():
+    experiencia = leer_experiencia()
+    musculos = [c[0] for c in experiencia]
+    grasas = [c[1] for c in experiencia]
+    return {
+        "mus_min": min(musculos),
+        "mus_max": max(musculos),
+        "gra_min": min(grasas),
+        "gra_max": max(grasas)
+    }
+ 
+ 
+def motor_inferencia(prof_p, grasa_p, k=1):
+    experiencia = leer_experiencia()
+ 
+    distancias = [
+        (math.sqrt((prof_p - c[0]) ** 2 + (grasa_p - c[1]) ** 2), c)
+        for c in experiencia
+    ]
+    distancias.sort(key=lambda x: x[0])
+ 
+    k_real = min(k, len(distancias))
+    vecinos = distancias[:k_real]
+ 
+    if k_real == 1:
+        return vecinos[0][1], vecinos[0][0], vecinos
+ 
+    eps = 1e-6
+    pesos = [1 / (d ** 2 + eps) for d, c in vecinos]
+    suma_pesos = sum(pesos)
+ 
+    avg_lslot = sum(w * c[2] for w, (d, c) in zip(pesos, vecinos)) / suma_pesos
+    avg_pot = sum(w * c[3] for w, (d, c) in zip(pesos, vecinos)) / suma_pesos
+    avg_temp = sum(w * c[4] for w, (d, c) in zip(pesos, vecinos)) / suma_pesos
+    avg_dist = sum(d for d, c in vecinos) / k_real
+ 
+    caso_consenso = (
+        prof_p,
+        grasa_p,
+        round(avg_lslot, 1),
+        round(avg_pot, 1),
+        round(avg_temp, 1)
+    )
+ 
+    return caso_consenso, avg_dist, vecinos
+ 
+ 
+def obtener_descripcion_antena(l_slot):
+    return f"Antena de ranura adaptable (L = {l_slot} mm)"
+ 
+ 
+def clasificar_caso(musculo, grasa):
+    if grasa >= 10:
+        return "Paciente con grasa elevada"
+    elif musculo >= 35:
+        return "Tumor profundo"
+    elif musculo <= 15:
+        return "Tumor superficial"
+    else:
+        return "Caso estándar"
+ 
+ 
+def determinar_seguridad_termica(temp_max):
+    if temp_max < 41.5:
+        return "🟡 Posible infracaloración"
+    elif temp_max <= 44.5:
+        return "🟢 Óptima (41.5–44.5 °C)"
+    else:
+        return "🔴 Riesgo térmico alto"
+ 
+ 
+def estimar_confianza(dist_media):
+    if dist_media <= 2.0:
+        return "Alta"
+    elif dist_media <= 5.0:
+        return "Media"
+    else:
+        return "Baja"
+ 
+ 
+# ================================================================
+# NUEVAS FUNCIONES (2, 5, 7, 10)
+# ================================================================
+def validar_entrada_clinica(nombre, dni, edad, musculo, grasa):
+    if not nombre or not dni or not edad:
+        raise ValueError("Nombre, DNI/NIE y Edad son obligatorios.")
+ 
+    try:
+        edad_int = int(edad)
+    except ValueError:
+        raise ValueError("La edad debe ser un número entero.")
+ 
+    if edad_int < 1 or edad_int > 120:
+        raise ValueError("La edad introducida está fuera de un rango razonable.")
+ 
+    if musculo <= 0:
+        raise ValueError("La profundidad tumoral debe ser mayor que 0 mm.")
+ 
+    if grasa < 0:
+        raise ValueError("El espesor de grasa no puede ser negativo.")
+ 
+    if musculo > 100:
+        raise ValueError("La profundidad tumoral introducida es excesiva para este modelo.")
+ 
+    if grasa > 50:
+        raise ValueError("El espesor de grasa introducido es excesivo para este modelo.")
+ 
+    return edad_int
+ 
+ 
+def evaluar_rango_experiencia(musculo, grasa):
+    rangos = obtener_rangos_experiencia()
+ 
+    dentro_mus = rangos["mus_min"] <= musculo <= rangos["mus_max"]
+    dentro_gra = rangos["gra_min"] <= grasa <= rangos["gra_max"]
+ 
+    if dentro_mus and dentro_gra:
+        return "Sí", ""
+    elif dentro_mus or dentro_gra:
+        return "Parcial", "El caso se sitúa parcialmente fuera del rango cubierto por la base de experiencia."
+    else:
+        return "No", "El caso se encuentra fuera del rango principal de experiencia. Interpretar con precaución."
+ 
+ 
+def determinar_simulacion_pendiente(rango_cubierto, confianza):
+    if rango_cubierto == "No":
+        return "Sí"
+    if rango_cubierto == "Parcial" and confianza == "Baja":
+        return "Sí"
+    if confianza == "Baja":
+        return "Sí"
+    return "No"
+ 
+ 
+def exportar_historial_csv():
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+    cur.execute("""
+SELECT fecha, nombre, dni, edad, sexo, musculo, grasa, k_usado, tipo_caso,
+l_slot, potencia, temp_max, dist_knn, similitud, seguridad,
+confianza, rango_cubierto, simulacion_pendiente
+FROM Historial_v6
+ORDER BY id DESC
+""")
+    filas = cur.fetchall()
+    conn.close()
+ 
+    if not filas:
+        messagebox.showwarning("Aviso", "No hay registros en el historial para exportar.")
+        return
+ 
+    nombre_sugerido = f"Historial_HYPERSAD_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+ 
+    ruta = filedialog.asksaveasfilename(
+        defaultextension=".csv",
+        filetypes=[("Archivo CSV", "*.csv")],
+        initialfile=nombre_sugerido,
+        title="Guardar historial como CSV"
+    )
+ 
+    if not ruta:
+        return
+ 
+    cabeceras = [
+        "Fecha", "Nombre", "DNI/NIE", "Edad", "Sexo", "Musculo_mm", "Grasa_mm",
+        "k_usado", "Tipo_caso", "L_slot_mm", "Potencia_W", "Temp_max_C",
+        "Dist_knn", "Similitud_%", "Seguridad", "Confianza",
+        "Rango_cubierto", "Simulacion_pendiente"
+    ]
+ 
+    try:
+        with open(ruta, "w", newline="", encoding="utf-8-sig") as f:
+            writer = csv.writer(f, delimiter=";")
+            writer.writerow(cabeceras)
+            writer.writerows(filas)
+ 
+        messagebox.showinfo("Éxito", f"Historial exportado correctamente a:\n{ruta}")
+    except Exception as e:
+        messagebox.showerror("Error", f"No se pudo exportar el historial.\n\nDetalle: {e}")
+ 
+ 
+# ================================================================
+# FASE 3: GRÁFICO kNN
+# ================================================================
+def ver_grafico_knn_canvas(root, p_mus, p_grasa, vecinos):
+    experiencia = leer_experiencia()
+ 
+    win = tk.Toplevel(root)
+    win.title(f"Plano Músculo–Grasa (kNN - {len(vecinos)} Vecinos)")
+    win.geometry("1080x760")
+    win.configure(bg="white")
+ 
+    canvas = tk.Canvas(win, bg="white", highlightthickness=0)
+    canvas.pack(fill="both", expand=True)
+ 
+    W, H = 1020, 700
+    L, R, T, B = 85, 360, 60, 95
+ 
+    xs = [c[0] for c in experiencia] + [p_mus]
+    ys = [c[1] for c in experiencia] + [p_grasa]
+ 
+    xmin, xmax = min(xs), max(xs)
+    ymin, ymax = min(ys), max(ys)
+ 
+    def pad(a, b):
+        if math.isclose(a, b):
+            a -= 1
+            b += 1
+        margen = 0.12 * (b - a)
+        return a - margen, b + margen
+ 
+    xmin, xmax = pad(xmin, xmax)
+    ymin, ymax = pad(ymin, ymax)
+ 
+    plot_w = W - (L + R)
+    plot_h = H - (T + B)
+ 
+    def x_to_px(x):
+        return L + (x - xmin) / (xmax - xmin) * plot_w
+ 
+    def y_to_px(y):
+        return T + (ymax - y) / (ymax - ymin) * plot_h
+ 
+    def color_por_lslot(lslot):
+        if lslot <= 82.5:
+            return "#1565c0"
+        elif lslot <= 85.0:
+            return "#1e88e5"
+        else:
+            return "#42a5f5"
+ 
+    def dibujar_texto_con_fondo(
+        x, y, texto,
+        fill_text="#263238",
+        fill_box="white",
+        outline="#cfd8dc",
+        font=("Segoe UI", 9),
+        anchor="w",
+        padx=5,
+        pady=3
+    ):
+        txt = canvas.create_text(
+            x, y, text=texto, anchor=anchor, font=font, fill=fill_text
+        )
+        bbox = canvas.bbox(txt)
+        if bbox:
+            rect = canvas.create_rectangle(
+                bbox[0] - padx, bbox[1] - pady,
+                bbox[2] + padx, bbox[3] + pady,
+                fill=fill_box, outline=outline
+            )
+            canvas.tag_lower(rect, txt)
+        return txt
+ 
+    canvas.create_text(
+        W / 2 - 60, 28,
+        text=f"Búsqueda kNN (k={len(vecinos)}) en el plano anatómico",
+        font=("Segoe UI", 16, "bold"),
+        fill="#0d47a1"
+    )
+ 
+    canvas.create_line(L, H - B, W - R, H - B, width=2, fill="#0d47a1")
+    canvas.create_line(L, T, L, H - B, width=2, fill="#0d47a1")
+ 
+    DIV = 5
+    for i in range(DIV + 1):
+        xv = xmin + i * (xmax - xmin) / DIV
+        px = x_to_px(xv)
+ 
+        canvas.create_line(px, H - B, px, H - B + 8, fill="#0d47a1")
+        canvas.create_text(px, H - B + 22, text=f"{xv:.1f}", font=("Segoe UI", 9))
+        canvas.create_line(px, T, px, H - B, fill="#eceff1")
+ 
+        yv = ymin + i * (ymax - ymin) / DIV
+        py = y_to_px(yv)
+ 
+        canvas.create_line(L - 8, py, L, py, fill="#0d47a1")
+        canvas.create_text(L - 30, py, text=f"{yv:.1f}", font=("Segoe UI", 9))
+        canvas.create_line(L, py, W - R, py, fill="#eceff1")
+ 
+    canvas.create_text(
+        L + plot_w / 2,
+        H - 45,
+        text="Profundidad en músculo (mm)",
+        font=("Segoe UI", 11, "bold"),
+        fill="#0d47a1"
+    )
+ 
+    canvas.create_text(
+        35,
+        T + plot_h / 2,
+        text="Espesor de grasa (mm)",
+        angle=90,
+        font=("Segoe UI", 11, "bold"),
+        fill="#0d47a1"
+    )
+ 
+    for c in experiencia:
+        cx, cy = x_to_px(c[0]), y_to_px(c[1])
+        canvas.create_oval(
+            cx - 5, cy - 5, cx + 5, cy + 5,
+            fill=color_por_lslot(c[2]),
+            outline=""
+        )
+ 
+    px, py = x_to_px(p_mus), y_to_px(p_grasa)
+ 
+    canvas.create_oval(
+        px - 9, py - 9, px + 9, py + 9,
+        outline="#d32f2f", width=3
+    )
+ 
+    dibujar_texto_con_fondo(
+        px + 10, py + 18,
+        f"Paciente: M={p_mus:.1f} G={p_grasa:.1f}",
+        fill_text="#d32f2f",
+        outline="#ef9a9a",
+        font=("Segoe UI", 9, "bold"),
+        anchor="w"
+    )
+ 
+    offsets = [
+        (-24, -18),
+        (18, -18),
+        (18, 18),
+        (-24, 18),
+        (18, 36)
+    ]
+ 
+    for i, (dist, caso) in enumerate(vecinos):
+        bx, by = x_to_px(caso[0]), y_to_px(caso[1])
+ 
+        canvas.create_line(
+            px, py, bx, by,
+            dash=(4, 4),
+            fill="#90a4ae",
+            width=2
+        )
+ 
+        canvas.create_oval(
+            bx - 7, by - 7, bx + 7, by + 7,
+            fill="#0d47a1",
+            outline="white",
+            width=1
+        )
+ 
+        dx, dy = offsets[i % len(offsets)]
+ 
+        dibujar_texto_con_fondo(
+            bx + dx, by + dy,
+            f"V{i+1}",
+            fill_text="#263238",
+            outline="#b0bec5",
+            font=("Segoe UI", 9, "bold"),
+            anchor="center"
+        )
+ 
+    # Leyenda
+    lx = W - 285
+    ly = 70
+ 
+    dibujar_texto_con_fondo(
+        lx, ly,
+        "Leyenda L_slot",
+        fill_text="#0d47a1",
+        outline="#90caf9",
+        font=("Segoe UI", 10, "bold"),
+        anchor="w"
+    )
+ 
+    canvas.create_oval(lx + 8, ly + 28, lx + 16, ly + 36, fill="#1565c0", outline="")
+    canvas.create_text(lx + 24, ly + 32, text="L ≤ 82.5 mm", anchor="w", font=("Segoe UI", 9))
+ 
+    canvas.create_oval(lx + 8, ly + 52, lx + 16, ly + 60, fill="#1e88e5", outline="")
+    canvas.create_text(lx + 24, ly + 56, text="82.5 < L ≤ 85.0 mm", anchor="w", font=("Segoe UI", 9))
+ 
+    canvas.create_oval(lx + 8, ly + 76, lx + 16, ly + 84, fill="#42a5f5", outline="")
+    canvas.create_text(lx + 24, ly + 80, text="L > 85.0 mm", anchor="w", font=("Segoe UI", 9))
+ 
+    # Panel resumen
+    bx0 = W - 315
+    by0 = 320
+    bx1 = W - 25
+    by1 = 640
+ 
+    canvas.create_rectangle(
+        bx0, by0, bx1, by1,
+        fill="#fafafa",
+        outline="#cfd8dc",
+        width=1
+    )
+ 
+    canvas.create_text(
+        bx0 + 12, by0 + 18,
+        text="Resumen vecinos kNN",
+        anchor="w",
+        font=("Segoe UI", 10, "bold"),
+        fill="#0d47a1"
+    )
+ 
+    y_text = by0 + 52
+    for i, (dist, caso) in enumerate(vecinos):
+        linea = (
+            f"V{i+1}: M={caso[0]:.1f} mm G={caso[1]:.1f} mm\n"
+            f" L={caso[2]:.1f} mm P={caso[3]:.1f} W d={dist:.2f}"
+        )
+ 
+        canvas.create_text(
+            bx0 + 12, y_text,
+            text=linea,
+            anchor="nw",
+            font=("Consolas", 8),
+            fill="#37474f",
+            justify="left"
+        )
+        y_text += 42
+ 
+    canvas.create_text(
+        W - 170, H - 32,
+        text="Los puntos azules representan la base de experiencia.\n"
+             "Solo se etiquetan los vecinos usados por kNN.",
+        anchor="center",
+        font=("Segoe UI", 8, "italic"),
+        fill="#607d8b"
+    )
+ 
+ 
+# ================================================================
+# FASE 4: INFORME MÉDICO AVANZADO (HTML)
+# ================================================================
+def generar_informe_html(datos):
+    if not os.path.exists("Informes_HYPERSAD"):
+        os.makedirs("Informes_HYPERSAD")
+ 
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    name_safe = datos['nombre'].replace(" ", "_")
+    filename = os.path.abspath(f"Informes_HYPERSAD/Informe_{name_safe}_{timestamp}.html")
+ 
+    html_content = f"""
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Informe HYPERSAD - {datos['nombre']}</title>
+<style>
+body {{
+font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+color: #333;
+line-height: 1.6;
+margin: 40px auto;
+max-width: 850px;
+padding: 20px;
+background-color: #f9fbfd;
+}}
+.header {{
+text-align: center;
+border-bottom: 3px solid #0d47a1;
+padding-bottom: 20px;
+margin-bottom: 30px;
+}}
+.header h1 {{
+color: #0d47a1;
+margin: 0;
+font-size: 28px;
+letter-spacing: 1px;
+}}
+.header p {{
+color: #666;
+font-style: italic;
+margin: 5px 0 0 0;
+}}
+h2 {{
+color: #1565c0;
+border-bottom: 1px solid #ddd;
+padding-bottom: 5px;
+font-size: 18px;
+margin-top: 30px;
+}}
+table {{
+width: 100%;
+border-collapse: collapse;
+margin-top: 15px;
+background-color: #fff;
+box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}}
+th, td {{
+padding: 12px 15px;
+text-align: left;
+border-bottom: 1px solid #eee;
+}}
+th {{
+background-color: #f4f6f9;
+color: #333;
+width: 40%;
+font-weight: 600;
+}}
+.alert-box {{
+background-color: #e3f2fd;
+border-left: 4px solid #1976d2;
+padding: 15px;
+margin-top: 30px;
+font-size: 14px;
+}}
+.footer {{
+text-align: center;
+margin-top: 50px;
+font-size: 12px;
+color: #888;
+border-top: 1px solid #ddd;
+padding-top: 20px;
+}}
+</style>
+</head>
+<body>
+<div class="header">
+<h1>INFORME DE PLANIFICACIÓN TERAPÉUTICA</h1>
+<p>SISTEMA HYPERSAD - Clinical Decision Support</p>
+</div>
+ 
+<h2>DATOS DEL PACIENTE</h2>
+<table>
+<tr><th>Nombre Completo:</th><td>{datos['nombre']}</td></tr>
+<tr><th>DNI / NIE (Validado):</th><td>{datos['dni']}</td></tr>
+<tr><th>Edad / Sexo:</th><td>{datos['edad']} años / {datos['sexo']}</td></tr>
+<tr><th>Fecha de Evaluación:</th><td>{datos['fecha']}</td></tr>
+</table>
+ 
+<h2>ANATOMÍA ONCOLÓGICA</h2>
+<table>
+<tr><th>Profundidad del Tumor (Músculo):</th><td>{datos['musculo']} mm</td></tr>
+<tr><th>Espesor de la Capa de Grasa:</th><td>{datos['grasa']} mm</td></tr>
+<tr><th>Tipo de Caso Clínico:</th><td>{datos['tipo']}</td></tr>
+<tr><th>Rango cubierto por la base:</th><td>{datos['rango_cubierto']}</td></tr>
+</table>
+ 
+<h2>PROPUESTA FÍSICA (PROTOCOLO ESHO)</h2>
+<table>
+<tr><th>Configuración de la Antena:</th><td><b>Antena de ranura adaptable</b></td></tr>
+<tr><th>Longitud efectiva de ranura:</th><td><b>{datos['caso'][2]} mm</b></td></tr>
+<tr><th>Potencia de Generador:</th><td><b>{datos['caso'][3]} W</b></td></tr>
+<tr><th>Tiempo de Sesión:</th><td>45 - 60 minutos (Steady-State)</td></tr>
+<tr><th>Temperatura Máx. Prevista:</th><td>{datos['caso'][4]} °C</td></tr>
+<tr><th>Seguridad Térmica:</th><td>{datos['seg']}</td></tr>
+<tr><th>Confianza de la Predicción:</th><td>{datos['confianza']}</td></tr>
+<tr><th>Simulación futura recomendada:</th><td>{datos['simulacion_pendiente']}</td></tr>
+</table>
+ 
+<h2>MÉTRICAS DEL ALGORITMO DE IA</h2>
+<table>
+<tr><th>Algoritmo Aplicado:</th><td>k-Nearest Neighbors (kNN)</td></tr>
+<tr><th>Parámetro (k):</th><td>{datos['k']} vecino(s) más cercano(s)</td></tr>
+<tr><th>Distancia Euclídea Media:</th><td>{datos['dist']:.3f}</td></tr>
+<tr><th>Similitud Estadística:</th><td>{datos['sim']:.1f}%</td></tr>
+</table>
+ 
+<div class="alert-box">
+<strong>Nota Clínica y Descargo de Responsabilidad:</strong><br>
+HYPERSAD es un prototipo experimental de apoyo a la decisión. Las métricas presentadas provienen de
+un mapeo de similitud basado en simulaciones electromagnéticas (CST Studio Suite) y modelado
+termodinámico (Ecuación de Pennes en MATLAB). Se ruega que prevalezca siempre el juicio médico profesional.
+</div>
+ 
+<div class="footer">
+HYPERSAD v1.0 | © 2026 Cayetano G. Gómez Aguado | Documento Confidencial
+</div>
+</body>
+</html>
+"""
+ 
+    with open(filename, "w", encoding="utf-8") as f:
+        f.write(html_content)
+ 
+    try:
+        webbrowser.open(f"file://{filename}")
+    except Exception:
+        pass
+ 
+    return filename
+ 
+ 
+# ================================================================
+# FASE 5: GUI COMPLETA
+# ================================================================
+class AppHyperSAD:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("HYPERSAD – Clinical Decision Support")
+ 
+        ancho_pantalla = self.root.winfo_screenwidth()
+        alto_pantalla = self.root.winfo_screenheight()
+ 
+        ancho_ventana = int(ancho_pantalla * 0.48)
+        if ancho_ventana < 820:
+            ancho_ventana = 820
+ 
+        alto_ventana = 1040
+        x = int((ancho_pantalla / 2) - (ancho_ventana / 2))
+        y = int((alto_pantalla / 2) - (alto_ventana / 2))
+ 
+        self.root.geometry(f"{ancho_ventana}x{alto_ventana}+{x}+{y}")
+        self.root.minsize(840, 980)
+        self.root.configure(bg="#f4f6f9")
+ 
+        style = ttk.Style()
+        if 'clam' in style.theme_names():
+            style.theme_use('clam')
+ 
+        style.configure("TEntry", fieldbackground="white", borderwidth=0, padding=6)
+        style.configure("TCombobox", fieldbackground="white", borderwidth=0, padding=6)
+        style.configure("Horizontal.TProgressbar", background="#1976d2", troughcolor="#e3f2fd")
+ 
+        # --- CABECERA ---
+        header = tk.Frame(root, bg="#0d47a1")
+        header.pack(fill="x", side="top")
+ 
+        tk.Label(
+            header,
+            text="HYPERSAD",
+            font=("Segoe UI", 28, "bold"),
+            bg="#0d47a1",
+            fg="white"
+        ).pack(pady=(20, 0))
+ 
+        tk.Label(
+            header,
+            text="Sistema de Apoyo a la Decisión Clínica",
+            font=("Segoe UI", 11, "italic"),
+            bg="#0d47a1",
+            fg="#90caf9"
+        ).pack(pady=(0, 20))
+ 
+        tk.Label(
+            root,
+            text="HYPERSAD v1.0 | © 2026 Cayetano G. Gómez Aguado",
+            font=("Segoe UI", 8, "italic"),
+            bg="#f4f6f9",
+            fg="#adb5bd"
+        ).pack(side="bottom", pady=10)
+ 
+        main = tk.Frame(root, bg="#f4f6f9", padx=30, pady=10)
+        main.pack(fill="both", expand=True)
+ 
+        # --- DATOS PACIENTE ---
+        tk.Label(
+            main,
+            text="DATOS DEL PACIENTE",
+            bg="#f4f6f9",
+            fg="#0d47a1",
+            font=("Segoe UI", 11, "bold")
+        ).pack(anchor="w")
+ 
+        self.create_input(main, "Nombre completo:", "ent_nombre")
+ 
+        row_datos = tk.Frame(main, bg="#f4f6f9")
+        row_datos.pack(fill="x")
+ 
+        frame_dni = tk.Frame(row_datos, bg="#f4f6f9")
+        frame_dni.pack(side="left", fill="x", expand=True, padx=(0, 5))
+        self.create_input(frame_dni, "DNI / NIE:", "ent_dni")
+ 
+        frame_edad = tk.Frame(row_datos, bg="#f4f6f9")
+        frame_edad.pack(side="left", fill="x", expand=True, padx=5)
+        self.create_input(frame_edad, "Edad:", "ent_edad")
+ 
+        frame_sexo = tk.Frame(row_datos, bg="#f4f6f9")
+        frame_sexo.pack(side="left", fill="x", expand=True, padx=(5, 0))
+        tk.Label(
+            frame_sexo,
+            text="Sexo (Biológico):",
+            bg="#f4f6f9",
+            fg="#333",
+            font=("Segoe UI", 9, "bold")
+        ).pack(anchor="w", pady=(8, 2))
+ 
+        self.cmb_sexo = ttk.Combobox(
+            frame_sexo,
+            values=["Masculino", "Femenino"],
+            state="readonly",
+            font=("Segoe UI", 11)
+        )
+        self.cmb_sexo.current(0)
+        self.cmb_sexo.pack(fill="x")
+ 
+        # --- PARÁMETROS ANATÓMICOS ---
+        tk.Label(
+            main,
+            text="PARÁMETROS CLÍNICOS Y ALGORITMO",
+            bg="#f4f6f9",
+            fg="#0d47a1",
+            font=("Segoe UI", 11, "bold")
+        ).pack(anchor="w", pady=(15, 0))
+ 
+        row_anat = tk.Frame(main, bg="#f4f6f9")
+        row_anat.pack(fill="x")
+ 
+        frame_mus = tk.Frame(row_anat, bg="#f4f6f9")
+        frame_mus.pack(side="left", fill="x", expand=True, padx=(0, 5))
+        self.create_input(frame_mus, "Profundidad Tumor (mm):", "ent_mus")
+ 
+        frame_gra = tk.Frame(row_anat, bg="#f4f6f9")
+        frame_gra.pack(side="left", fill="x", expand=True, padx=5)
+        self.create_input(frame_gra, "Espesor Grasa (mm):", "ent_gra")
+ 
+        frame_k = tk.Frame(row_anat, bg="#f4f6f9")
+        frame_k.pack(side="left", fill="x", expand=True, padx=(5, 0))
+        tk.Label(
+            frame_k,
+            text="Valor 'k' (Vecinos):",
+            bg="#f4f6f9",
+            fg="#333",
+            font=("Segoe UI", 9, "bold")
+        ).pack(anchor="w", pady=(8, 2))
+ 
+        self.cmb_k = ttk.Combobox(
+            frame_k,
+            values=["1", "3", "5"],
+            state="readonly",
+            font=("Segoe UI", 11)
+        )
+        self.cmb_k.current(0)
+        self.cmb_k.pack(fill="x")
+ 
+        # --- BOTONES DE CÁLCULO ---
+        self.btn_plan = tk.Button(
+            main,
+            text="GENERAR PLANIFICACIÓN",
+            command=self.iniciar_calculo,
+            bg="#1976d2",
+            fg="white",
+            font=("Segoe UI", 11, "bold"),
+            relief="flat",
+            cursor="hand2",
+            pady=10
+        )
+        self.btn_plan.pack(fill="x", pady=(15, 5))
+ 
+        self.progreso = ttk.Progressbar(
+            main,
+            orient="horizontal",
+            mode="determinate",
+            style="Horizontal.TProgressbar"
+        )
+ 
+        self.lbl_estado = tk.Label(
+            main,
+            text="",
+            bg="#f4f6f9",
+            fg="#1976d2",
+            font=("Segoe UI", 9, "italic")
+        )
+ 
+        tk.Button(
+            main,
+            text="VER GRÁFICO kNN",
+            command=self.ver_grafico,
+            bg="#1565c0",
+            fg="white",
+            font=("Segoe UI", 11, "bold"),
+            relief="flat",
+            cursor="hand2",
+            pady=8
+        ).pack(fill="x", pady=(10, 15))
+ 
+        # --- PANEL DE RESULTADOS ---
+        self.frame_res = tk.LabelFrame(
+            main,
+            text=" PROPUESTA TERAPÉUTICA FÍSICA ",
+            bg="white",
+            fg="#0d47a1",
+            font=("Segoe UI", 10, "bold"),
+            padx=15,
+            pady=10,
+            borderwidth=1,
+            relief="solid"
+        )
+        self.frame_res.pack(fill="x", expand=False)
+ 
+        self.res_izq = tk.Frame(self.frame_res, bg="white")
+        self.res_izq.pack(side="left", fill="both", expand=True)
+ 
+        self.res_der = tk.Frame(self.frame_res, bg="white")
+        self.res_der.pack(side="right", fill="both", padx=5)
+ 
+        self.lbl_tipo = self.add_label("Tipo de caso:")
+        self.lbl_config_antena = self.add_label("Configuración de antena:")
+        self.lbl_pot = self.add_label("Potencia sugerida:")
+        self.lbl_temp = self.add_label("Temperatura máxima prevista:")
+        self.lbl_tiempo = self.add_label("Tiempo de sesión (ESHO): 45-60 min")
+        self.lbl_sim = self.add_label("Similitud promedio:")
+        self.lbl_conf = self.add_label("Confianza de la predicción:")
+        self.lbl_rango = self.add_label("Rango cubierto por la base:")
+        self.lbl_seg = self.add_label("Seguridad térmica:")
+        self.lbl_futuro = self.add_label("Simulación futura recomendada:")
+ 
+        # Canvas 1: Antena
+        self.canvas_antena = tk.Canvas(
+            self.res_der,
+            width=100,
+            height=190,
+            bg="white",
+            highlightthickness=0
+        )
+        self.canvas_antena.pack(side="left", padx=5)
+        self.canvas_antena.create_text(50, 95, text="Antena", fill="#999")
+ 
+        # Canvas 2: Mapa térmico
+        self.canvas_calor = tk.Canvas(
+            self.res_der,
+            width=100,
+            height=190,
+            bg="white",
+            highlightthickness=0
+        )
+        self.canvas_calor.pack(side="left", padx=5)
+        self.canvas_calor.create_text(50, 95, text="Tejidos", fill="#999")
+ 
+        # --- BOTONES FINALES ---
+        footer_frame = tk.Frame(main, bg="#f4f6f9")
+        footer_frame.pack(fill="x", pady=20)
+ 
+        tk.Button(
+            footer_frame,
+            text="📓 HISTORIAL",
+            width=14,
+            command=self.ver_historial,
+            bg="#1976d2",
+            fg="white",
+            font=("Segoe UI", 10, "bold"),
+            relief="flat",
+            cursor="hand2",
+            pady=10
+        ).pack(side="left", padx=(0, 10))
+ 
+        tk.Button(
+            footer_frame,
+            text="EXPORTAR CSV",
+            width=14,
+            command=exportar_historial_csv,
+            bg="#1565c0",
+            fg="white",
+            font=("Segoe UI", 10, "bold"),
+            relief="flat",
+            cursor="hand2",
+            pady=10
+        ).pack(side="left", padx=(0, 10))
+ 
+        tk.Button(
+            footer_frame,
+            text="GENERAR INFORME HTML",
+            command=self.generar_informe,
+            bg="#1976d2",
+            fg="white",
+            font=("Segoe UI", 10, "bold"),
+            relief="flat",
+            cursor="hand2",
+            pady=10
+        ).pack(side="left", fill="x", expand=True, padx=(0, 10))
+ 
+        tk.Button(
+            footer_frame,
+            text="ℹ MÉTODOS",
+            width=14,
+            command=self.mostrar_info,
+            bg="#ffb300",
+            fg="#333",
+            font=("Segoe UI", 10, "bold"),
+            relief="flat",
+            cursor="hand2",
+            pady=10
+        ).pack(side="right")
+ 
+        self.ultimo_resultado = None
+ 
+    def create_input(self, parent, text, varname):
+        tk.Label(
+            parent,
+            text=text,
+            bg="#f4f6f9",
+            fg="#333",
+            font=("Segoe UI", 9, "bold")
+        ).pack(anchor="w", pady=(8, 2))
+ 
+        e = ttk.Entry(parent, font=("Segoe UI", 11))
+        e.pack(fill="x")
+        setattr(self, varname, e)
+ 
+    def add_label(self, text):
+        lbl = tk.Label(
+            self.res_izq,
+            text=f"{text} --",
+            bg="white",
+            fg="#444",
+            anchor="w",
+            justify="left",
+            font=("Segoe UI", 10)
+        )
+        lbl.pack(fill="x", pady=3)
+        return lbl
+ 
+    def leer_float(self, widget, name):
+        try:
+            texto_limpio = widget.get().replace(',', '.').strip()
+            return float(texto_limpio)
+        except Exception:
+            raise ValueError(f"Valor numérico inválido en: {name}.")
+ 
+    # --- LÓGICA DE CÁLCULO ---
+    def iniciar_calculo(self):
+        try:
+            self.cur_nombre = self.ent_nombre.get().strip()
+            self.cur_dni = self.ent_dni.get().strip()
+            self.cur_edad = self.ent_edad.get().strip()
+            self.cur_sexo = self.cmb_sexo.get()
+            self.cur_k = int(self.cmb_k.get())
+ 
+            if not validar_dni_nie(self.cur_dni):
+                raise ValueError(
+                    f"El DNI o NIE introducido ('{self.cur_dni}') no es válido matemáticamente.\n"
+                    f"Revise los dígitos y la letra de control."
+                )
+ 
+            self.cur_mus = self.leer_float(self.ent_mus, "Músculo")
+            self.cur_gra = self.leer_float(self.ent_gra, "Grasa")
+ 
+            # Nueva función 5: coherencia de entrada
+            validar_entrada_clinica(
+                self.cur_nombre,
+                self.cur_dni,
+                self.cur_edad,
+                self.cur_mus,
+                self.cur_gra
+            )
+ 
+            self.btn_plan.config(state="disabled")
+            self.progreso.pack(fill="x")
+            self.lbl_estado.pack()
+            self.progreso['value'] = 0
+            self.lbl_estado.config(text=f"Consultando base de datos unificada (k={self.cur_k})...")
+            self.root.after(400, self.step2)
+ 
+        except ValueError as e:
+            messagebox.showerror("Error de Entrada", str(e))
+ 
+    def step2(self):
+        self.progreso['value'] = 40
+        self.lbl_estado.config(text="Modelando termodinámica de tejidos...")
+        self.root.after(500, self.step3)
+ 
+    def step3(self):
+        self.progreso['value'] = 80
+        self.lbl_estado.config(text="Generando informe físico...")
+        self.root.after(400, self.finalizar_calculo)
+ 
+    def finalizar_calculo(self):
+        self.progreso['value'] = 100
+        self.lbl_estado.config(text="Planificación completada.")
+ 
+        self.root.after(1000, lambda: self.progreso.pack_forget())
+        self.root.after(1000, lambda: self.lbl_estado.pack_forget())
+        self.btn_plan.config(state="normal")
+ 
+        caso, dist, vecinos = motor_inferencia(self.cur_mus, self.cur_gra, self.cur_k)
+        sim = max(0, 100 - dist * 8)
+ 
+        tipo_c = clasificar_caso(self.cur_mus, self.cur_gra)
+        confianza = estimar_confianza(dist)
+        seg = determinar_seguridad_termica(caso[4])
+ 
+        # Nueva función 2: extrapolación / rango
+        rango_cubierto, aviso_rango = evaluar_rango_experiencia(self.cur_mus, self.cur_gra)
+ 
+        # Nueva función 10: simulación futura recomendada
+        simulacion_pendiente = determinar_simulacion_pendiente(rango_cubierto, confianza)
+ 
+        if confianza == "Baja":
+            seg += " | Confianza reducida por baja similitud anatómica"
+ 
+        self.lbl_tipo.config(text=f"Tipo de caso: {tipo_c}")
+        self.lbl_config_antena.config(text=f"Configuración de antena: ranura ajustada a {caso[2]} mm")
+        self.lbl_pot.config(text=f"Potencia sugerida: {caso[3]} W")
+        self.lbl_temp.config(text=f"Temperatura máxima prevista: {caso[4]} °C")
+        self.lbl_sim.config(text=f"Similitud promedio: {sim:.1f}%")
+        self.lbl_conf.config(text=f"Confianza de la predicción: {confianza}")
+        self.lbl_rango.config(text=f"Rango cubierto por la base: {rango_cubierto}")
+        self.lbl_seg.config(text=f"Seguridad térmica: {seg}")
+        self.lbl_futuro.config(text=f"Simulación futura recomendada: {simulacion_pendiente}")
+ 
+        if aviso_rango:
+            messagebox.showwarning("Aviso de extrapolación", aviso_rango)
+ 
+        self.dibujar_antena(caso[2])
+        self.dibujar_mapa_termico(self.cur_gra, self.cur_mus, caso[4])
+ 
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        fecha_str = datetime.now().strftime("%d/%m/%Y %H:%M")
+ 
+        cursor.execute("""
+INSERT INTO Historial_v6 (
+fecha, nombre, dni, edad, sexo, musculo, grasa, k_usado,
+tipo_caso, l_slot, potencia, temp_max, dist_knn, similitud,
+seguridad, confianza, rango_cubierto, simulacion_pendiente
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+""", (
+            fecha_str,
+            self.cur_nombre,
+            self.cur_dni,
+            self.cur_edad,
+            self.cur_sexo,
+            self.cur_mus,
+            self.cur_gra,
+            self.cur_k,
+            tipo_c,
+            caso[2],
+            caso[3],
+            caso[4],
+            dist,
+            sim,
+            seg,
+            confianza,
+            rango_cubierto,
+            simulacion_pendiente
+        ))
+ 
+        conn.commit()
+        conn.close()
+ 
+        self.ultimo_resultado = {
+            "nombre": self.cur_nombre,
+            "dni": self.cur_dni,
+            "edad": self.cur_edad,
+            "sexo": self.cur_sexo,
+            "fecha": fecha_str,
+            "musculo": self.cur_mus,
+            "grasa": self.cur_gra,
+            "k": self.cur_k,
+            "caso": caso,
+            "vecinos": vecinos,
+            "dist": dist,
+            "sim": sim,
+            "tipo": tipo_c,
+            "seg": seg,
+            "confianza": confianza,
+            "rango_cubierto": rango_cubierto,
+            "simulacion_pendiente": simulacion_pendiente,
+            "config_antena": obtener_descripcion_antena(caso[2])
+        }
+ 
+    def dibujar_antena(self, l_slot):
+        self.canvas_antena.delete("all")
+ 
+        self.canvas_antena.create_rectangle(
+            15, 10, 85, 165,
+            fill="#e3f2fd",
+            outline="#64b5f6",
+            width=2
+        )
+ 
+        l_min = 80.0
+        l_max = 90.0
+        l_ajustada = max(l_min, min(l_slot, l_max))
+ 
+        h_pixel = 40 + ((l_ajustada - l_min) / (l_max - l_min)) * 80
+        y_ini = 10 + (155 - h_pixel) / 2
+ 
+        self.canvas_antena.create_rectangle(
+            45, y_ini, 55, y_ini + h_pixel,
+            fill="#1976d2",
+            outline=""
+        )
+ 
+        self.canvas_antena.create_text(
+            50, 177,
+            text="Ranura adaptable",
+            font=("Segoe UI", 8, "bold"),
+            fill="#0d47a1"
+        )
+ 
+    def dibujar_mapa_termico(self, grasa, musculo, temp):
+        self.canvas_calor.delete("all")
+ 
+        H_TOTAL = 155
+        prof_max = 50.0
+ 
+        h_grasa = max(15, min(H_TOTAL * (grasa / prof_max), 55))
+ 
+        self.canvas_calor.create_rectangle(
+            10, 10, 90, 10 + h_grasa,
+            fill="#fff59d",
+            outline=""
+        )
+        self.canvas_calor.create_text(
+            50, 10 + h_grasa / 2,
+            text="Grasa",
+            font=("Segoe UI", 7),
+            fill="#827717"
+        )
+ 
+        self.canvas_calor.create_rectangle(
+            10, 10 + h_grasa, 90, 165,
+            fill="#ffcdd2",
+            outline=""
+        )
+        self.canvas_calor.create_text(
+            50, 145,
+            text="Músculo",
+            font=("Segoe UI", 7),
+            fill="#c62828"
+        )
+ 
+        y_tumor = 10 + h_grasa + (H_TOTAL - h_grasa) * (musculo / 40.0)
+        y_tumor = min(y_tumor, 155)
+ 
+        if temp > 44.5:
+            color_hot = "#8e0000"
+        elif temp > 43.0:
+            color_hot = "#e53935"
+        elif temp > 41.5:
+            color_hot = "#fb8c00"
+        else:
+            color_hot = "#43a047"
+ 
+        self.canvas_calor.create_oval(
+            28, y_tumor - 20, 72, y_tumor + 20,
+            fill="",
+            outline=color_hot,
+            width=2
+        )
+        self.canvas_calor.create_oval(
+            32, y_tumor - 15, 68, y_tumor + 15,
+            fill=color_hot,
+            outline=""
+        )
+        self.canvas_calor.create_text(
+            50, y_tumor,
+            text=f"{temp}º",
+            font=("Segoe UI", 8, "bold"),
+            fill="white"
+        )
+ 
+        self.canvas_calor.create_text(
+            50, 177,
+            text="Tejidos",
+            font=("Segoe UI", 8, "bold"),
+            fill="#c62828"
+        )
+ 
+    # --- VENTANA DE HISTORIAL ---
+    def ver_historial(self):
+        win = tk.Toplevel(self.root)
+        win.title("Base de Datos - Historial Clínico Completo")
+        win.geometry("1400x460")
+        win.configure(bg="#f4f6f9")
+ 
+        tree_frame = tk.Frame(win)
+        tree_frame.pack(fill="both", expand=True, padx=15, pady=15)
+ 
+        scroll_y = ttk.Scrollbar(tree_frame, orient="vertical")
+        scroll_y.pack(side="right", fill="y")
+ 
+        scroll_x = ttk.Scrollbar(tree_frame, orient="horizontal")
+        scroll_x.pack(side="bottom", fill="x")
+ 
+        cols = (
+            "Fecha", "Nombre", "DNI/NIE", "Edad", "Sexo", "Músculo", "Grasa",
+            "K", "Tipo", "L_slot", "Pot.(W)", "Temp.(ºC)", "Simil.(%)",
+            "Confianza", "Rango", "Sim. futura", "Seguridad"
+        )
+ 
+        tree = ttk.Treeview(
+            tree_frame,
+            columns=cols,
+            show="headings",
+            yscrollcommand=scroll_y.set,
+            xscrollcommand=scroll_x.set
+        )
+ 
+        scroll_y.config(command=tree.yview)
+        scroll_x.config(command=tree.xview)
+ 
+        anchos = [120, 160, 95, 55, 85, 70, 70, 45, 165, 70, 75, 80, 80, 85, 90, 95, 220]
+        for i, c in enumerate(cols):
+            tree.heading(c, text=c)
+            tree.column(c, width=anchos[i], anchor="center")
+ 
+        conn = sqlite3.connect(DB_NAME)
+        cur = conn.cursor()
+ 
+        cur.execute("""
+SELECT fecha, nombre, dni, edad, sexo, musculo, grasa, k_usado,
+tipo_caso, l_slot, potencia, temp_max, ROUND(similitud, 1),
+confianza, rango_cubierto, simulacion_pendiente, seguridad
+FROM Historial_v6
+ORDER BY id DESC
+""")
+ 
+        for row in cur.fetchall():
+            tree.insert("", "end", values=row)
+ 
+        conn.close()
+        tree.pack(side="left", fill="both", expand=True)
+ 
+    def ver_grafico(self):
+        if not self.ultimo_resultado:
+            messagebox.showwarning("Aviso", "Genere primero una planificación.")
+        else:
+            ver_grafico_knn_canvas(
+                self.root,
+                self.ultimo_resultado["musculo"],
+                self.ultimo_resultado["grasa"],
+                self.ultimo_resultado["vecinos"]
+            )
+ 
+    def generar_informe(self):
+        if not self.ultimo_resultado:
+            messagebox.showwarning("Aviso", "Genere primero una planificación.")
+        else:
+            generar_informe_html(self.ultimo_resultado)
+            messagebox.showinfo(
+                "Éxito",
+                "Informe HTML creado.\n"
+                "Se abrirá automáticamente en su navegador web.\n\n"
+                "Puede pulsar Ctrl+P en el navegador para guardarlo como PDF."
+            )
+ 
+    def mostrar_info(self):
+        messagebox.showinfo(
+            "Método HYPERSAD",
+            "HYPERSAD kNN soporta k=1, 3, 5.\n"
+            "El sistema recomienda una configuración continua de la longitud efectiva de la ranura.\n"
+            "L_slot, potencia y temperatura se estiman mediante promedio ponderado por distancia.\n"
+            "Incluye control de coherencia de entrada, aviso de extrapolación,\n"
+            "exportación a CSV y marca de simulación futura recomendada.\n"
+            "Autor: C. Germán Gómez Aguado."
+        )
+ 
+ 
+# ================================================================
+# MAIN
+# ================================================================
+if __name__ == "__main__":
+    preparar_sistema()
+    root = tk.Tk()
+    app = AppHyperSAD(root)
+    root.mainloop()
