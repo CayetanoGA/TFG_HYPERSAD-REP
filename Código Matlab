@@ -1,0 +1,122 @@
+%  SIMULADOR TERMODINÁMICO DE HIPERTERMIA ONCOLÓGICA (ECUACIÓN DE PENNES)
+%  TFG - Análisis de Aplicador de Microondas (Caso Base: 86 mm)
+
+clear; clc; close all;
+
+%% 1. IMPORTAR DATOS DE CST
+disp('1. Leyendo el archivo de CST...');
+% Leemos el archivo saltando las 2 líneas de texto de cabecera de CST
+datos = readmatrix('SAR_86mm.txt', 'NumHeaderLines', 2); 
+
+% Extraemos las columnas (Coordenadas espaciales y SAR normalizado a 1W)
+x_cst = datos(:, 1);
+y_cst = datos(:, 2);
+z_cst = datos(:, 3);
+sar_cst = datos(:, 4); 
+
+%% 2. CREAR LA MALLA TÉRMICA (Para la Ecuación de Pennes)
+disp('2. Creando la malla térmica 3D a 1 mm...');
+% Creamos un cubo virtual perfecto con pasos de 1 mm para el análisis térmico
+[X, Y, Z] = meshgrid(min(x_cst):1:max(x_cst), ...
+                     min(y_cst):1:max(y_cst), ...
+                     min(z_cst):1:max(z_cst));
+
+% Interpolar los miles de puntos de CST a nuestro cubo matemático regular
+disp('3. Interpolando datos... (Esto puede tardar unos segundos)');
+F = scatteredInterpolant(x_cst, y_cst, z_cst, sar_cst, 'linear', 'none');
+SAR_Antena1 = F(X, Y, Z);
+
+% Limpiamos la matriz (ponemos a 0 el SAR de lo que quede fuera del modelo)
+SAR_Antena1(isnan(SAR_Antena1)) = 0;
+
+%% 3. CREAR EL ARRAY VIRTUAL
+disp('4. Creando el Array Virtual (Antena 2 opuesta)...');
+% Hacemos un "espejo" de la antena 1 para simular un tratamiento profundo
+SAR_Antena2 = flip(SAR_Antena1, 2); 
+
+disp('5. ¡Superposición electromagnética completada!');
+% Sumamos las energías para la configuración de doble aplicador
+SAR_Total_Array = SAR_Antena1 + SAR_Antena2;
+
+%% 4. VISUALIZAR EL ARRAY VIRTUAL EN MATLAB
+disp('Dibujando el corte transversal del SAR volumétrico...');
+figure('Name', 'SAR del Array Virtual', 'Color', 'w');
+
+% Hacemos un corte en el centro exacto de tu modelo anatómico
+corte_x = mean(X(:));
+corte_y = mean(Y(:));
+corte_z = mean(Z(:));
+
+slice(X, Y, Z, SAR_Total_Array, corte_x, corte_y, corte_z);
+shading interp; % Suaviza los píxeles
+colormap jet;   % Escala de colores clásica (azul a rojo) para SAR
+colorbar;
+title('Corte Transversal: SAR Normalizado (Array de 2 Aplicadores)');
+xlabel('Eje X (mm)'); ylabel('Eje Y (mm)'); zlabel('Eje Z (mm)');
+drawnow; % Forzamos a que pinte la figura antes de calcular el calor
+
+%% 5. CÁLCULO DE TEMPERATURA (PENNES OPTIMIZADO)
+disp('---------------------------------------------------');
+disp('Iniciando simulador térmico optimizado (45 min)...');
+
+% --- Propiedades Físicas ---
+rho = 1050;       % Densidad del tejido (kg/m^3)
+cp = 3600;        % Calor específico (J/kg*C)
+wb = 0.0005;      % Tasa de perfusión (1/s)
+cb = 3800;        % Calor específico de la sangre (J/kg*C)
+Ta = 37;          % Temperatura arterial (C)
+
+% --- Configuración ---
+T = ones(size(SAR_Total_Array)) * 37; % Todo el cuerpo empieza a 37 ºC
+tiempo_total = 2700;                  % 15 minutos de tratamiento (en segundos)
+dt = 10;                              % Saltos de 10s para máxima velocidad
+pasos = tiempo_total / dt;
+
+% --- LA RULETA DEL MÉDICO (Potencia de Entrada) ---
+Potencia_Generador = 1; % <--- JUEGA CON ESTE VALOR HASTA ROZAR LOS 43.5 ºC
+Q_sar = rho * SAR_Total_Array * Potencia_Generador;
+
+disp('Calculando evolución térmica... (¡Esto será instantáneo!)');
+
+for i = 1:pasos
+    % 1. Enfriamiento por Sangre (El sumidero principal, ¡ya corregido!)
+    Q_blood = rho * wb * cb * (Ta - T);
+    
+    % 2. Balance de Energía (Dominado por SAR y Sangre)
+    T = T + ( (Q_sar + Q_blood) / (rho * cp) ) * dt; 
+    
+    % 3. Refrigeración constante del Bolus a 15 ºC
+    T(:, 1:3, :) = 15;   
+    T(:, end-2:end, :) = 15;
+end
+
+disp('¡Simulación térmica completada con éxito!');
+
+%% 6. ANÁLISIS CLÍNICO Y RESULTADO FINAL
+T_max = max(T(:));
+
+fprintf('\n=======================================\n');
+fprintf('🏥 INFORME DOSIMÉTRICO - CASO BASE\n');
+fprintf('---------------------------------------\n');
+fprintf('Potencia Inyectada por Antena : %d W\n', Potencia_Generador);
+fprintf('Tiempo de Tratamiento         : 45 min\n');
+fprintf('Temperatura Máxima Alcanzada  : %.2f ºC\n', T_max);
+fprintf('=======================================\n\n');
+
+% Validación de seguridad clínica
+if T_max >= 41 && T_max <= 45
+    disp('✅ ÉXITO TERAPÉUTICO: Temperatura dentro de la ventana hipertermia oncológica.');
+elseif T_max > 45
+    disp('❌ RIESGO DE QUEMADURA: Temperatura excesiva. Baja la variable Potencia_Generador.');
+else
+    disp('⚠️ INFRACALORIFICACIÓN: El tumor sobrevive. Sube la variable Potencia_Generador.');
+end
+
+% Visualizar el mapa de calor final
+figure('Name', 'Mapa Térmico Final (Celsius)', 'Color', 'w');
+slice(X, Y, Z, T, corte_x, corte_y, corte_z);
+shading interp; 
+colormap hot; 
+colorbar;
+title(sprintf('Distribución Térmica tras 20 min (Potencia: %d W)', Potencia_Generador));
+xlabel('Eje X (mm)'); ylabel('Eje Y (mm)'); zlabel('Eje Z (mm)');
